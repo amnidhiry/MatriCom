@@ -13,12 +13,10 @@ library(shinyBS)
 library(Seurat)
 library(SeuratObject)
 library(scCustomize)
-library(sp)
-library(uwot)
 library(shinydashboard)
-library(scater)
 library(ensembldb)
 library(EnsDb.Hsapiens.v86)
+library(EnsDb.Mmusculus.v79)
 library(gridExtra)
 library(writexl)
 library(BiocManager)
@@ -29,14 +27,12 @@ library(viridis)
 library(collapsibleTree)
 library(igraph)
 library(scales)
-library(qs)
-library(igraph)
+library(qs2)
 library(stringr)
 library(reshape2)
 library(htmltools)
 library(cicerone)
 library(hdf5r)
-library(qs)
 library(SingleCellExperiment)
 
 # Moved to R/, because stuff in `R` gets sourced automatically when in package/project
@@ -171,19 +167,26 @@ matricom.slim <- function(obj,
   #if(isTRUE(mode)){rel.mode <- "absolute"}else{rel.mode<-"relative"}
 
   if(isTRUE(conv)){
-    gs <- ensembldb::select(EnsDb.Hsapiens.v86, keys=rownames(obj@assays$RNA@data), keytype = "GENEID", columns = c("SYMBOL","GENEID"), multivals="asNA")
+    # pick the species annotation DB based on the Ensembl ID prefix
+    ensdb <- if(any(grepl("^ENSMUSG", rownames(obj@assays$RNA@data)))){
+      EnsDb.Mmusculus.v79
+    }else{
+      EnsDb.Hsapiens.v86
+    }
+
+    gs <- ensembldb::select(ensdb, keys=rownames(obj@assays$RNA@data), keytype = "GENEID", columns = c("SYMBOL","GENEID"), multivals="asNA")
     rn <- data.frame(GENEID=rownames(obj@assays$RNA@data),ord=c(1:length(rownames(obj@assays$RNA@data))))
     gs <- distinct(merge(rn,gs,by="GENEID",all.x=T))
     gs$SYMBOL[is.na(gs$SYMBOL)] <- paste0("not.annotated.gene_",sample(c(1:1000000),1))
     gs <- gs[order(gs$ord),]
-    rownames(obj@assays$RNA@data) <- gs$SYMBOL
+    rownames(obj@assays$RNA@data) <- toupper(gs$SYMBOL) #enforcing humanity, even for mouse MGI symbols
 
-    gs <- ensembldb::select(EnsDb.Hsapiens.v86, keys=rownames(obj@assays$RNA@counts), keytype = "GENEID", columns = c("SYMBOL","GENEID"), multivals="asNA")
+    gs <- ensembldb::select(ensdb, keys=rownames(obj@assays$RNA@counts), keytype = "GENEID", columns = c("SYMBOL","GENEID"), multivals="asNA")
     rn <- data.frame(GENEID=rownames(obj@assays$RNA@counts),ord=c(1:length(rownames(obj@assays$RNA@counts))))
     gs <- distinct(merge(rn,gs,by="GENEID",all.x=T))
     gs$SYMBOL[is.na(gs$SYMBOL)] <- paste0("not.annotated.gene_",sample(c(1:1000000),1))
     gs <- gs[order(gs$ord),]
-    rownames(obj@assays$RNA@counts) <- gs$SYMBOL
+    rownames(obj@assays$RNA@counts) <- toupper(gs$SYMBOL) #enforcing humanity, even for mouse MGI symbols
   }
 
   os <- obj@meta.data[,group.column][!is.na(obj@meta.data[,group.column])]
@@ -347,7 +350,7 @@ matricom.slim <- function(obj,
     #   fin <- fin[,c(1,2,7,8,3,4,9,10,5,6)]
     #   return(fin)
     # }else{
-    prova <- Percent_Expressing(seurat_object = obj, features = unique(c(fin$Gene1,fin$Gene2)), group_by = group.column)
+    prova <- Percent_Expressing(seurat_object = obj, features = unique(c(fin$Gene1,fin$Gene2)), group.by = group.column)
     prova <- prova/100
     # colnames(prova) <- gsub("\\."," ",colnames(prova))
     # fin$Population1 <- gsub("\\."," ",fin$Population1)
@@ -727,7 +730,7 @@ savesub4 <- function(data,sel,mlist){
                       "Secreted factors",
                       "Non-matrisome")
 
-    for(i in 1:nrow(df)){
+    for(i in seq_len(nrow(df))){
       if(tb[rownames(tb)%in%df$Var2[i],
             colnames(tb)%in%df$Var1[i]] == 0
       ){
@@ -1162,36 +1165,18 @@ filtres <- function(data,
 }
 
 load_to_seurat <- function(filepath){
-  ext <- tools::file_ext(filepath)
-  
-  if (ext == "qs") {
-    obj <- qread(filepath)
-  }else if (ext == "QS") {
-    obj <- qread(filepath)
-  }else if (ext == "Qs") {
-    obj <- qread(filepath)
-  }
-  
-  else if (ext == "rds") {
+  ext <- tolower(tools::file_ext(filepath))
+
+  if (ext == "qs2") {
+    obj <- qs2::qs_read(filepath)
+  } else if (ext == "rds") {
     obj <- readRDS(filepath)
-  } else if (ext == "RDS") {
-    obj <- readRDS(filepath)
-  } else if (ext == "Rds") {
-    obj <- readRDS(filepath)
-  }
-  
-  else if (ext == "h5ad") {
-    obj <- load_h5ad_to_list(filepath)
-    
-  } else if (ext == "H5AD") {
-    obj <- load_h5ad_to_list(filepath)
-    
-  }else if (ext == "H5ad") {
+  } else if (ext == "h5ad") {
     obj <- load_h5ad_to_list(filepath)
   } else {
     stop("Unsupported file type.")
   }
-  
+
   # Convert depending on object type
   if (inherits(obj, "Seurat")) {
     return(obj)
@@ -1207,83 +1192,104 @@ load_to_seurat <- function(filepath){
   }
 }
 
+# Read an AnnData obs/var entry (H5Group of per-column datasets/categoricals,
+# as written by anndata >= 0.8, or a legacy H5D compound dataset) into a data.frame
+read_h5ad_df <- function(grp){
+  if (inherits(grp, "H5D")) {
+    return(as.data.frame(grp$read()))
+  }
+  if (!inherits(grp, "H5Group")) {
+    return(NULL)
+  }
+
+  idx_name <- if (grp$attr_exists("_index")) grp$attr_open("_index")$read() else "_index"
+
+  col_names <- if (grp$attr_exists("column-order")) {
+    grp$attr_open("column-order")$read()
+  } else {
+    setdiff(names(grp), idx_name)
+  }
+
+  read_col <- function(name){
+    item <- grp[[name]]
+    if (inherits(item, "H5Group")) {
+      categories <- item[["categories"]]$read()
+      codes <- item[["codes"]]$read()
+      categories[ifelse(codes >= 0, codes + 1L, NA_integer_)]
+    } else {
+      item$read()
+    }
+  }
+
+  idx_vals <- if (idx_name %in% names(grp)) as.character(read_col(idx_name)) else NULL
+
+  if (length(col_names) == 0) {
+    df <- data.frame(row.names = idx_vals)
+  } else {
+    cols <- setNames(lapply(col_names, read_col), col_names)
+    df <- as.data.frame(cols, stringsAsFactors = FALSE)
+    if (!is.null(idx_vals)) rownames(df) <- idx_vals
+  }
+
+  df
+}
+
 load_h5ad_to_list <- function(filepath){
   library(Matrix)
   library(hdf5r)
   library(Seurat)
-  
+
   h5 <- H5File$new(filepath, mode = "r")
   X_entry <- h5[["X"]]
-  
+
   if (inherits(X_entry, "H5Group")) {
     message("Loading sparse X matrix from h5ad")
     data <- X_entry[["data"]]$read()
     indices <- X_entry[["indices"]]$read()
     indptr <- X_entry[["indptr"]]$read()
-    
-    n_rows <- length(indptr) - 1
-    n_cols <- max(indices) + 1
-    
-    i <- integer(length(data))
-    j <- integer(length(data))
-    
-    for (row in seq_len(n_rows)) {
-      start <- indptr[row] + 1
-      end <- indptr[row + 1]
-      if (start <= end) {
-        idx <- start:end
-        i[idx] <- row
-        j[idx] <- indices[idx] + 1
-      }
-    }
-    
+
+    n_rows <- length(indptr) - 1   # n_obs (cells) - CSR row count
+    n_cols <- max(indices) + 1     # n_var (genes) - CSR column count
+
+    i <- rep(seq_len(n_rows), times = diff(indptr)) # cell index per entry
+    j <- indices + 1                                # gene index per entry
+
+    # build directly as genes (rows) x cells (cols), as CreateSeuratObject expects
     counts <- sparseMatrix(
-      i = i,
-      j = j,
+      i = j,
+      j = i,
       x = data,
-      dims = c(n_rows, n_cols)
+      dims = c(n_cols, n_rows)
     )
   } else if (inherits(X_entry, "H5D")) {
     message("Loading dense X matrix from h5ad")
-    counts <- X_entry$read()
+    counts <- t(X_entry$read()) # X is cells x genes -> transpose to genes x cells
   } else {
     stop("Unknown X format.")
   }
-  
+
   # obs and var
   obs <- tryCatch({
-    if ("obs" %in% names(h5)) {
-      df <- as.data.frame(h5[["obs"]]$read())
-      rownames(df) <- rownames(h5[["obs"]])  # <- important: set rownames
-      df
-    } else {
-      NULL
-    }
+    if ("obs" %in% names(h5)) read_h5ad_df(h5[["obs"]]) else NULL
   }, error = function(e) NULL)
-  
+
   var <- tryCatch({
-    if ("var" %in% names(h5)) {
-      df <- as.data.frame(h5[["var"]]$read())
-      rownames(df) <- rownames(h5[["var"]])  # <- important: set rownames
-      df
-    } else {
-      NULL
-    }
+    if ("var" %in% names(h5)) read_h5ad_df(h5[["var"]]) else NULL
   }, error = function(e) NULL)
-  
+
   h5$close_all()
-  
-  # Add names to matrix
-  if (!is.null(obs)) {
-    colnames(counts) <- rownames(obs)
-  }
+
+  # Add names to matrix (genes x cells)
   if (!is.null(var)) {
     rownames(counts) <- rownames(var)
   }
-  
+  if (!is.null(obs)) {
+    colnames(counts) <- rownames(obs)
+  }
+
   # Now create Seurat object
   seurat_obj <- CreateSeuratObject(counts = counts, meta.data = obs)
-  
+
   return(seurat_obj)
 }
 
@@ -1400,11 +1406,11 @@ ui <- fluidPage(
                                ".RDS",
                                ".H5AD",
                                ".h5ad",
-                               ".qs",
-                               ".QS"
+                               ".qs2",
+                               ".QS2"
                     )) %>% helper(type = "inline",
                                   title = "Accepted file types",
-                                  content = c("MatriCom accepts scRNA-seq files of up to 1 GB from Seurat or SingleCellExperiment (RDS or QS format), and ScanPy/Loom (H5AD format).",
+                                  content = c("MatriCom accepts scRNA-seq files of up to 1 GB from Seurat or SingleCellExperiment (RDS or QS2 format), and ScanPy/Loom (H5AD format).",
                                               " ",
                                               "IMPORTANT: MatriCom currently only accepts human and mouse datasets. If your file contains Ensembl gene IDs, you must convert them to HGCN (human) or MGI (mouse) Gene Symbols by activating the conversion button."),
                                   buttonLabel = "OK")),
@@ -1728,49 +1734,6 @@ server <- function(input,output,session) {
     
     value(1)
     return(mat2)
-    
-     if(isTruthy(length(dp[grepl(".qs",dp,ignore.case = T)])>0)){
-      df <- qread(input$file1$datapath)
-
-      if(strsplit(as.character(df@version),split="\\.")[[1]][1] != 3){
-        def <- DefaultAssay(df)
-        mat <- df@assays[[def]]$counts
-        rownames(mat) <- rownames(df@assays[[def]]$counts)
-        colnames(mat) <- colnames(df@assays[[def]]$counts)
-        mat <- CreateAssayObject(counts=mat)
-        mat2 <- CreateSeuratObject(counts=mat,meta.data = df@meta.data)
-        mat2 <- NormalizeData(mat2)
-        #df[["RNA"]] <- as(object = df[["RNA"]], Class = "Assay")
-      }
-
-      value(1)
-      return(mat2)
-    }
-
-    if(isTruthy(length(dp[grepl(".H5AD",dp,ignore.case = T)])>0)){
-      #g <- gsub("(.*/\\s*(.*$))", "\\2", dp)
-      g <- dp
-      Convert(g, dest = "h5seurat", overwrite = TRUE, verbose = F)
-      g <- gsub(".h5ad","",g)
-      g <- gsub(".H5AD","",g)
-      df <- LoadH5Seurat(paste0(g,".h5seurat"),verbose = F)
-
-      if(strsplit(as.character(df@version),split="\\.")[[1]][1] != 3){
-        def <- DefaultAssay(df)
-        mat <- df@assays[[def]]$counts
-        rownames(mat) <- rownames(df@assays[[def]]$counts)
-        colnames(mat) <- colnames(df@assays[[def]]$counts)
-        mat <- CreateAssayObject(counts=mat)
-        mat2 <- CreateSeuratObject(counts=mat,meta.data = df@meta.data)
-        mat2 <- NormalizeData(mat2)
-        #df[["RNA"]] <- as(object = df[["RNA"]], Class = "Assay")
-      }
-
-      value(1)
-      return(mat2)
-    }
-
-
   }) #user-specific FILE READ-IN
 
   observeEvent(input$file1, {
@@ -2014,6 +1977,7 @@ server <- function(input,output,session) {
       attributes(df)$outcome <- "failure"
       return(df)
     })
+    return(res)
     }
 
     if(value()==1 & isTruthy(input$convbutton)){
@@ -2041,6 +2005,7 @@ server <- function(input,output,session) {
         attributes(df)$outcome <- "failure"
         return(df)
       })
+      return(res)
     }
 
 
@@ -2066,6 +2031,7 @@ server <- function(input,output,session) {
         attributes(df)$outcome <- "failure"
         return(df)
       })
+      return(res)
     }
 
   }) #actual trycatch is here
@@ -2387,7 +2353,7 @@ server <- function(input,output,session) {
                           "Secreted factors",
                           "Non.matrisome")
 
-        for(i in 1:nrow(df)){
+        for(i in seq_len(nrow(df))){
           if(tb[rownames(tb)%in%df$Var2[i],
                 colnames(tb)%in%df$Var1[i]] == 0
           ){
@@ -2840,7 +2806,10 @@ server <- function(input,output,session) {
         va <- va[order(-va)]
         if(length(va)<=100){va<-va}else{va<-va[1:100]}
         va <- rescale(va,to=c(1,10))
-        vb <- names(neighbors(n,names(va)))
+        vb <- lapply(names(va), function(x){
+          names(neighbors(n,x))
+        })
+        vb <- unlist(unique(vb))
 
         va <- data.frame(V1=names(va),value=va)
         va$x <- c(nrow(va):1)
