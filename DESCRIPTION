@@ -1,9 +1,8 @@
 Package: MatriCom
 Title: MatriCom: inference of matrisome communication systems from scRNA-seq data
 Version: 1.0
-Authors@R: 
-    person("Valerio", "Izzi", , "valerio.izzi@oulu.fi", role = c("aut", "cre"),
-           comment = c(ORCID = "YOUR-ORCID-ID"))
+Authors@R:
+    person("Valerio", "Izzi", , "valerio.izzi@oulu.fi", role = c("aut", "cre"))
 Description: A tool to infer matrisome communication systems across tissues and compartments from scRNA-seq data
 License: GPL (>= 3)
 Encoding: UTF-8
@@ -13,12 +12,12 @@ LazyData: true
 Depends: R (>= 4.0)
 Imports: shiny, cicerone, Matrix, DT, dplyr, data.table, ggplot2,
         shinyWidgets, shinybusy, shinyjs, shinyhelper, shinycssloaders,
-        shinyBS, Seurat, SeuratDisk, SeuratObject, scCustomize, sp,
-        uwot, shinydashboard, ensembldb, EnsDb.Hsapiens.v86, gridExtra,
-        writexl, BiocManager, packcircles, ggiraph, plotly, viridis,
-        collapsibleTree, igraph, scales, qs, igraph, stringr, reshape2, htmltools, 
-        hdf5r, qs, SingleCellExperiment
+        shinyBS, Seurat, SeuratObject, scCustomize, shinydashboard, ensembldb,
+        EnsDb.Hsapiens.v86, EnsDb.Mmusculus.v79, gridExtra, writexl,
+        BiocManager, packcircles, ggiraph, plotly, viridis,
+        collapsibleTree, igraph, scales, qs2, stringr, reshape2,
+        htmltools, hdf5r, SingleCellExperiment
 NeedsCompilation: no
 Packaged: 2024-06-14 15:31:34 UTC; petrov
-Author: Valerio Izzi [aut, cre] (YOUR-ORCID-ID)
+Author: Valerio Izzi [aut, cre]
 Maintainer: Valerio Izzi <valerio.izzi@oulu.fi>
