@@ -13,6 +13,6 @@ matricom.app <- function(){
     )
   }
 
-  runApp(appDir = app_dir, launch.browser = T)
+  shiny::runApp(appDir = app_dir, launch.browser = TRUE)
 }
 
